@@ -11,6 +11,44 @@ python3 main.py --model /models/MiniMax-M2.5 --scheme FP8_TO_BF16 --save-dir /mo
 python main.py --model /models/MiniMax-M2.5-BF16 --scheme W8A8 --alg ptq --needs-data false --ignore 'lm_head,re:.*moe.gate+,re:.*moe.e_score_correction_bias+' --save-dir /models/MiniMax-M2.5-W8A8
 ```
 
+### MiniMax-H3-Image DiT W8A8-FP8（权重 Per-Channel / 激活 Dynamic Per-Token）
+
+离线导出 MiniMax-H3-Image DiT backbone 的 FP8 checkpoint：权重对称
+per-output-channel 量化（e4m3），激活由 sglang runtime 侧动态 per-token
+量化（`MiniMaxH3Fp8LinearMethod`），无需校准数据。输出格式为 sglang
+multimodal_gen loader 的 `h3_channel_fp8_main_blocks_v1` 约定（通过
+`inspect_fp8_checkpoint` 校验）。
+
+依赖：`torch`（含 FP8 支持）、`safetensors`。在容器/环境中运行：
+
+```bash
+python examples/minimax/quantize_minimax_h3_image_fp8.py \
+  --src        /models/MiniMax--MiniMax-H3-Image/transformer_diffusers \
+  --native-src /models/MiniMax--MiniMax-H3-Image/transformer \
+  --dst        /models/MiniMax-H3-Image-CHANNEL-FP8
+```
+
+说明：
+
+- `--native-src` 必传：官方 diffusers 导出缺少 `proj_out`（即
+  `final_layer.video_out`）与 `rope.inv_freq`，脚本从 native 布局目录补入。
+- 量化对象为 50 层 backbone 的 6 个矩阵/层（`attn.to_q/to_k/to_v/to_out.0`、
+  `ff.net.0.proj`、`ff.net.2`），其余张量原样拷贝。
+- 输出目录含 12 个 shard + `manifest.json`（variant `fl2va`、profile
+  `backbone`）。
+
+SGLang 服务端使用（注意与 `--minimax-h3-adaln-online true` 互斥，需关闭）：
+
+```bash
+sglang serve ... \
+  --transformer-weights-path /models/MiniMax-H3-Image-CHANNEL-FP8 \
+  --minimax-h3-adaln-online false
+```
+
+4 卡 HCU 实测（1024x1024 图生图）：Denoising 4.48s → 3.50s（-22%），
+e2e -15%；输出 vs BF16：PSNR 33.2 dB / SSIM 0.978。
+
+
 ### MiniMax-H3-mxfp4-w4a4
 
 ```bash
